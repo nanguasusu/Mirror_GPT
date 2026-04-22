@@ -20,6 +20,23 @@ type ModelsResponse = {
   }>;
 };
 
+const modelBlacklist = [
+  "embed",
+  "clip",
+  "reward",
+  "guard",
+  "safety",
+  "pii",
+  "parse",
+  "translate",
+  "topic-control",
+];
+
+const isChatModel = (modelId: string) => {
+  const normalized = modelId.toLowerCase();
+  return !modelBlacklist.some((keyword) => normalized.includes(keyword));
+};
+
 const parseUpstreamError = async (response: Response) => {
   try {
     const data = (await response.json()) as {
@@ -84,9 +101,14 @@ export const onRequestPost = async ({
   }
 
   const models = Array.isArray(payload.data)
-    ? payload.data
-        .map((item) => item.id?.trim())
-        .filter((item): item is string => Boolean(item))
+    ? Array.from(
+        new Set(
+          payload.data
+            .map((item) => item.id?.trim())
+            .filter((item): item is string => Boolean(item))
+            .filter(isChatModel),
+        ),
+      ).sort((left, right) => left.localeCompare(right))
     : [];
 
   const now = new Date().toISOString();

@@ -918,7 +918,7 @@ const Index = () => {
               <ChevronDown className="size-4 text-muted-foreground" />
             </button>
             {showProviderMenu && (
-              <div className="absolute top-full left-0 mt-2 w-52 rounded-2xl border border-border bg-background shadow-lg p-2 z-20">
+              <div className="absolute top-full left-0 mt-2 max-h-72 w-52 overflow-y-auto rounded-2xl border border-border bg-background p-2 shadow-lg z-20">
                 {availableProviders.length === 0 ? (
                   <div className="px-3 py-2 text-xs text-muted-foreground">
                     No providers configured.
@@ -961,7 +961,7 @@ const Index = () => {
               <ChevronDown className="size-4 text-muted-foreground" />
             </button>
             {showModelMenu && (
-              <div className="absolute top-full left-0 mt-2 w-48 rounded-2xl border border-border bg-background shadow-lg p-2 z-20">
+              <div className="absolute top-full left-0 mt-2 max-h-72 w-56 overflow-y-auto rounded-2xl border border-border bg-background p-2 shadow-lg z-20">
                 {availableModels.map((model) => (
                   <button
                     key={model}
