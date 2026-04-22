@@ -252,16 +252,29 @@ export const onRequestPost = async ({
     .filter(Boolean)
     .join("\n\n");
 
-  const upstreamResponse = await fetch(env.AI_BASE_URL || defaultBaseUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${env.AI_API_KEY}`,
-    },
-    body: JSON.stringify(
-      buildUpstreamRequestBody(selectedModel, normalizedMessages, systemPrompt, true),
-    ),
-  });
+  let upstreamResponse: Response;
+  try {
+    upstreamResponse = await fetch(env.AI_BASE_URL || defaultBaseUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${env.AI_API_KEY}`,
+      },
+      body: JSON.stringify(
+        buildUpstreamRequestBody(selectedModel, normalizedMessages, systemPrompt, true),
+      ),
+    });
+  } catch (networkError) {
+    return json(
+      {
+        error:
+          networkError instanceof Error
+            ? `Upstream request failed before response: ${networkError.message}`
+            : "Upstream request failed before response.",
+      },
+      502,
+    );
+  }
 
   if (!upstreamResponse.ok || !upstreamResponse.body) {
     return json(
