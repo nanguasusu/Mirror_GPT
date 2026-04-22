@@ -39,6 +39,14 @@ type UpstreamChunk = {
   }>;
 };
 
+type NonStreamCompletion = {
+  choices?: Array<{
+    message?: {
+      content?: unknown;
+    };
+  }>;
+};
+
 const defaultBaseUrl = "https://api.openai.com/v1/chat/completions";
 
 const encoder = new TextEncoder();
@@ -95,6 +103,39 @@ const buildUpstreamMessages = (
     };
   }),
 ];
+
+const buildUpstreamRequestBody = (
+  model: string,
+  messages: StoredMessage[],
+  systemPrompt: string,
+  stream: boolean,
+) => ({
+  model,
+  temperature: 0.7,
+  stream,
+  messages: buildUpstreamMessages(messages, systemPrompt),
+});
+
+const extractTextContent = (content: unknown): string => {
+  if (typeof content === "string") {
+    return content;
+  }
+
+  if (Array.isArray(content)) {
+    return content
+      .map((item) => {
+        if (!item || typeof item !== "object") {
+          return "";
+        }
+
+        const maybeText = (item as { text?: unknown }).text;
+        return typeof maybeText === "string" ? maybeText : "";
+      })
+      .join("");
+  }
+
+  return "";
+};
 
 const parseUpstreamError = async (response: Response) => {
   try {
@@ -185,12 +226,9 @@ export const onRequestPost = async ({
       "Content-Type": "application/json",
       Authorization: `Bearer ${env.AI_API_KEY}`,
     },
-    body: JSON.stringify({
-      model: selectedModel,
-      temperature: 0.7,
-      stream: true,
-      messages: buildUpstreamMessages(normalizedMessages, systemPrompt),
-    }),
+    body: JSON.stringify(
+      buildUpstreamRequestBody(selectedModel, normalizedMessages, systemPrompt, true),
+    ),
   });
 
   if (!upstreamResponse.ok || !upstreamResponse.body) {
@@ -262,6 +300,43 @@ export const onRequestPost = async ({
 
           if (request.signal.aborted) {
             break;
+          }
+        }
+
+        if (!fullReply.trim() && !request.signal.aborted) {
+          const fallbackResponse = await fetch(env.AI_BASE_URL || defaultBaseUrl, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${env.AI_API_KEY}`,
+            },
+            body: JSON.stringify(
+              buildUpstreamRequestBody(
+                selectedModel,
+                normalizedMessages,
+                systemPrompt,
+                false,
+              ),
+            ),
+          });
+
+          if (!fallbackResponse.ok) {
+            throw new Error(await parseUpstreamError(fallbackResponse));
+          }
+
+          const fallbackData = (await fallbackResponse.json()) as NonStreamCompletion;
+          const fallbackContent = extractTextContent(
+            fallbackData.choices?.[0]?.message?.content,
+          ).trim();
+
+          if (fallbackContent) {
+            fullReply = fallbackContent;
+            controller.enqueue(
+              toSse({
+                type: "token",
+                content: fallbackContent,
+              }),
+            );
           }
         }
 

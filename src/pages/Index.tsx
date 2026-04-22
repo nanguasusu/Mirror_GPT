@@ -378,6 +378,9 @@ const Index = () => {
 
       if (!finalContent.trim()) {
         setMessages(nextMessages);
+        throw new Error(
+          "No response content received from upstream API. Check model/image support and streaming format.",
+        );
       }
     } catch (requestError) {
       if (
@@ -923,7 +926,10 @@ const Index = () => {
                             className="mb-3 max-h-64 rounded-2xl border border-white/10 object-cover"
                           />
                         )}
-                        {message.content || "Image attached"}
+                        {message.content ||
+                          (message.role === "user" && message.imageDataUrl
+                            ? "Image attached"
+                            : "")}
                       </div>
                     </div>
                   ))}
