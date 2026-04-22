@@ -1,0 +1,332 @@
+import {
+  defaultModel,
+  defaultMode,
+  defaultSystemPrompt,
+  getAllowedModels,
+  getAuthenticatedUser,
+  getModeInstruction,
+  json,
+  readConversationIndex,
+  readJson,
+  setActiveConversation,
+  writeConversation,
+  type ChatMode,
+  type Env,
+  type StoredConversation,
+  type StoredMessage,
+} from "./_shared";
+
+type IncomingMessage = {
+  id?: string;
+  role?: "user" | "assistant";
+  content?: string;
+  imageDataUrl?: string;
+};
+
+type ChatBody = {
+  conversationId?: string;
+  messages?: IncomingMessage[];
+  model?: string;
+  mode?: ChatMode;
+  researchEnabled?: boolean;
+};
+
+type UpstreamChunk = {
+  choices?: Array<{
+    delta?: {
+      content?: string;
+    };
+  }>;
+};
+
+const defaultBaseUrl = "https://api.openai.com/v1/chat/completions";
+
+const encoder = new TextEncoder();
+
+const toSse = (payload: Record<string, unknown>) =>
+  encoder.encode(`data: ${JSON.stringify(payload)}\n\n`);
+
+const normalizeMessages = (messages: IncomingMessage[]) =>
+  messages
+    .filter(
+      (message) =>
+        (message.role === "user" || message.role === "assistant") &&
+        ((message.content && message.content.trim()) || message.imageDataUrl),
+    )
+    .map(
+      (message) =>
+        ({
+          id: message.id || crypto.randomUUID(),
+          role: message.role as "user" | "assistant",
+          content: message.content?.trim() || "",
+          imageDataUrl: message.imageDataUrl,
+        }) satisfies StoredMessage,
+    );
+
+const buildUpstreamMessages = (
+  messages: StoredMessage[],
+  systemPrompt: string,
+) => [
+  {
+    role: "system",
+    content: systemPrompt,
+  },
+  ...messages.map((message) => {
+    if (message.role === "user" && message.imageDataUrl) {
+      return {
+        role: "user",
+        content: [
+          ...(message.content
+            ? [{ type: "text", text: message.content }]
+            : []),
+          {
+            type: "image_url",
+            image_url: {
+              url: message.imageDataUrl,
+            },
+          },
+        ],
+      };
+    }
+
+    return {
+      role: message.role,
+      content: message.content,
+    };
+  }),
+];
+
+const parseUpstreamError = async (response: Response) => {
+  try {
+    const data = (await response.json()) as {
+      error?: {
+        message?: string;
+      };
+    };
+    return data.error?.message || "Model request failed.";
+  } catch {
+    return "Model request failed.";
+  }
+};
+
+export const onRequestOptions = async () =>
+  new Response(null, {
+    status: 204,
+    headers: {
+      "Access-Control-Allow-Methods": "POST,OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+      "Cache-Control": "no-store",
+    },
+  });
+
+export const onRequestPost = async ({
+  env,
+  request,
+}: {
+  env: Env;
+  request: Request;
+}) => {
+  const username = await getAuthenticatedUser(request, env);
+  if (!username) {
+    return json({ error: "Unauthorized." }, 401);
+  }
+
+  if (!env.AI_API_KEY) {
+    return json(
+      { error: "Missing AI_API_KEY. Set it in Cloudflare Pages environment variables." },
+      500,
+    );
+  }
+
+  const body = await readJson<ChatBody>(request);
+  if (!body) {
+    return json({ error: "Invalid JSON body." }, 400);
+  }
+
+  const normalizedMessages = normalizeMessages(body.messages || []);
+  if (normalizedMessages.length === 0) {
+    return json({ error: "At least one message is required." }, 400);
+  }
+
+  const conversationId = body.conversationId?.trim();
+  if (!conversationId) {
+    return json({ error: "conversationId is required." }, 400);
+  }
+
+  const conversationIndex = await readConversationIndex(env, username);
+  if (!conversationIndex.conversations.some((item) => item.id === conversationId)) {
+    return json({ error: "Conversation not found." }, 404);
+  }
+
+  const allowedModels = getAllowedModels(env);
+  const selectedModel = allowedModels.includes(body.model || "")
+    ? (body.model as string)
+    : env.AI_MODEL || defaultModel;
+  const selectedMode = body.mode || defaultMode;
+
+  const systemPrompt = [
+    env.AI_SYSTEM_PROMPT || defaultSystemPrompt,
+    getModeInstruction(selectedMode, Boolean(body.researchEnabled)),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  const upstreamResponse = await fetch(env.AI_BASE_URL || defaultBaseUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${env.AI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: selectedModel,
+      temperature: 0.7,
+      stream: true,
+      messages: buildUpstreamMessages(normalizedMessages, systemPrompt),
+    }),
+  });
+
+  if (!upstreamResponse.ok || !upstreamResponse.body) {
+    return json(
+      {
+        error:
+          (await parseUpstreamError(upstreamResponse)) ||
+          "Model request failed. Check AI_BASE_URL, AI_MODEL, and AI_API_KEY.",
+      },
+      upstreamResponse.status || 500,
+    );
+  }
+
+  const upstreamReader = upstreamResponse.body.getReader();
+  const decoder = new TextDecoder();
+  let fullReply = "";
+  let buffer = "";
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      controller.enqueue(
+        toSse({
+          type: "start",
+          model: selectedModel,
+          mode: selectedMode,
+        }),
+      );
+
+      try {
+        while (true) {
+          const { done, value } = await upstreamReader.read();
+          if (done) {
+            break;
+          }
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          for (const rawLine of lines) {
+            const line = rawLine.trim();
+            if (!line.startsWith("data:")) {
+              continue;
+            }
+
+            const data = line.slice(5).trim();
+            if (!data || data === "[DONE]") {
+              continue;
+            }
+
+            try {
+              const parsed = JSON.parse(data) as UpstreamChunk;
+              const delta = parsed.choices?.[0]?.delta?.content;
+              if (!delta) {
+                continue;
+              }
+
+              fullReply += delta;
+              controller.enqueue(
+                toSse({
+                  type: "token",
+                  content: delta,
+                }),
+              );
+            } catch {
+              continue;
+            }
+          }
+
+          if (request.signal.aborted) {
+            break;
+          }
+        }
+
+        const assistantMessage: StoredMessage = {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: fullReply.trim(),
+        };
+
+        const conversationMessages = assistantMessage.content
+          ? [...normalizedMessages, assistantMessage]
+          : normalizedMessages;
+
+        const conversation: StoredConversation = {
+          id: conversationId,
+          title: "",
+          messages: conversationMessages,
+          model: selectedModel,
+          mode: selectedMode,
+          updatedAt: new Date().toISOString(),
+        };
+
+        await writeConversation(env, username, conversation);
+        await setActiveConversation(env, username, conversationId);
+
+        controller.enqueue(
+          toSse({
+            type: "done",
+            message: assistantMessage.content,
+          }),
+        );
+        controller.close();
+      } catch (error) {
+        if (fullReply.trim()) {
+          await writeConversation(env, username, {
+            id: conversationId,
+            title: "",
+            messages: [
+              ...normalizedMessages,
+              {
+                id: crypto.randomUUID(),
+                role: "assistant",
+                content: fullReply.trim(),
+              },
+            ],
+            model: selectedModel,
+            mode: selectedMode,
+            updatedAt: new Date().toISOString(),
+          });
+          await setActiveConversation(env, username, conversationId);
+        }
+        controller.enqueue(
+          toSse({
+            type: "error",
+            error:
+              error instanceof Error
+                ? error.message
+                : "Streaming request failed.",
+          }),
+        );
+        controller.close();
+      }
+    },
+    async cancel() {
+      await upstreamReader.cancel();
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+    },
+  });
+};
