@@ -1,5 +1,4 @@
 import {
-  ensureChatKv,
   getAuthenticatedUser,
   json,
   readConversationById,
@@ -24,11 +23,6 @@ export const onRequestPost = async ({
   const username = await getAuthenticatedUser(request, env);
   if (!username) {
     return json({ error: "Unauthorized." }, 401);
-  }
-
-  const kvError = ensureChatKv(env);
-  if (kvError) {
-    return kvError;
   }
 
   const body = await readJson<RenameBody>(request);
