@@ -137,16 +137,48 @@ const extractTextContent = (content: unknown): string => {
   return "";
 };
 
-const parseUpstreamError = async (response: Response) => {
+const clipText = (value: string, max = 120) => value.replace(/\s+/g, " ").trim().slice(0, max);
+
+const parseJsonIfPossible = async <T>(response: Response): Promise<T | null> => {
+  const contentType = response.headers.get("content-type")?.toLowerCase() || "";
+  if (!contentType.includes("application/json")) {
+    return null;
+  }
+
   try {
-    const data = (await response.json()) as {
-      error?: {
-        message?: string;
-      };
-    };
-    return data.error?.message || "Model request failed.";
+    return (await response.json()) as T;
   } catch {
-    return "Model request failed.";
+    return null;
+  }
+};
+
+const parseUpstreamError = async (response: Response) => {
+  const contentType = response.headers.get("content-type")?.toLowerCase() || "";
+  const status = response.status || 500;
+
+  if (contentType.includes("application/json")) {
+    try {
+      const data = (await response.json()) as {
+        error?: {
+          message?: string;
+        };
+      };
+      if (data.error?.message) {
+        return data.error.message;
+      }
+    } catch {
+      return `Model request failed (${status}): invalid JSON error body from upstream.`;
+    }
+  }
+
+  try {
+    const raw = await response.text();
+    if (raw) {
+      return `Model request failed (${status}). Upstream returned non-JSON: ${clipText(raw)}`;
+    }
+    return `Model request failed (${status}).`;
+  } catch {
+    return `Model request failed (${status}).`;
   }
 };
 
@@ -242,6 +274,19 @@ export const onRequestPost = async ({
     );
   }
 
+  const streamContentType = upstreamResponse.headers.get("content-type")?.toLowerCase() || "";
+  if (!streamContentType.includes("text/event-stream")) {
+    const raw = await upstreamResponse.text();
+    return json(
+      {
+        error: `Upstream stream response is not SSE (${upstreamResponse.status}). Content-Type: ${
+          streamContentType || "unknown"
+        }. Body: ${clipText(raw)}`,
+      },
+      502,
+    );
+  }
+
   const upstreamReader = upstreamResponse.body.getReader();
   const decoder = new TextDecoder();
   let fullReply = "";
@@ -324,7 +369,16 @@ export const onRequestPost = async ({
             throw new Error(await parseUpstreamError(fallbackResponse));
           }
 
-          const fallbackData = (await fallbackResponse.json()) as NonStreamCompletion;
+          const fallbackData = await parseJsonIfPossible<NonStreamCompletion>(fallbackResponse);
+          if (!fallbackData) {
+            const raw = await fallbackResponse.text();
+            throw new Error(
+              `Fallback response is not JSON (${fallbackResponse.status}). Content-Type: ${
+                fallbackResponse.headers.get("content-type") || "unknown"
+              }. Body: ${clipText(raw)}`,
+            );
+          }
+
           const fallbackContent = extractTextContent(
             fallbackData.choices?.[0]?.message?.content,
           ).trim();
