@@ -1,11 +1,13 @@
 import {
   createConversation,
-  getAllowedModels,
   getAuthenticatedUser,
   getDefaultUsername,
   json,
   readConversation,
   readConversationIndex,
+  readProviderState,
+  resolveActiveProvider,
+  sanitizeProvider,
   type Env,
 } from "./_shared";
 
@@ -22,7 +24,10 @@ export const onRequestGet = async ({
       {
         authenticated: false,
         username: getDefaultUsername(env),
-        models: getAllowedModels(env),
+        models: [],
+        providers: [],
+        activeProviderId: null,
+        activeModelByProvider: {},
         kvBound: Boolean(env.CHAT_KV),
       },
       200,
@@ -30,6 +35,14 @@ export const onRequestGet = async ({
   }
 
   const index = await readConversationIndex(env, username);
+  const providerState = await readProviderState(env, username);
+  const activeProvider = resolveActiveProvider(providerState);
+  const activeModel =
+    (activeProvider &&
+      providerState.activeModelByProvider[activeProvider.id]) ||
+    activeProvider?.models[0] ||
+    "";
+
   const conversation =
     index.activeConversationId || index.conversations.length > 0
       ? await readConversation(env, username)
@@ -41,7 +54,11 @@ export const onRequestGet = async ({
     conversation,
     conversations: nextIndex.conversations,
     activeConversationId: nextIndex.activeConversationId || conversation.id,
-    models: getAllowedModels(env),
+    models: activeProvider?.models || [],
+    providers: providerState.providers.map(sanitizeProvider),
+    activeProviderId: activeProvider?.id || null,
+    activeModelByProvider: providerState.activeModelByProvider,
+    selectedModel: activeModel,
     kvBound: Boolean(env.CHAT_KV),
   });
 };

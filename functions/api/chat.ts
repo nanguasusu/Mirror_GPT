@@ -1,13 +1,15 @@
 import {
+  buildProviderEndpoint,
   defaultModel,
   defaultMode,
   defaultSystemPrompt,
-  getAllowedModels,
   getAuthenticatedUser,
   getModeInstruction,
   json,
   readConversationIndex,
+  readProviderState,
   readJson,
+  resolveActiveProvider,
   setActiveConversation,
   writeConversation,
   type ChatMode,
@@ -26,6 +28,7 @@ type IncomingMessage = {
 type ChatBody = {
   conversationId?: string;
   messages?: IncomingMessage[];
+  providerId?: string;
   model?: string;
   mode?: ChatMode;
   researchEnabled?: boolean;
@@ -46,8 +49,6 @@ type NonStreamCompletion = {
     };
   }>;
 };
-
-const defaultBaseUrl = "https://api.openai.com/v1/chat/completions";
 
 const encoder = new TextEncoder();
 
@@ -204,13 +205,6 @@ export const onRequestPost = async ({
     return json({ error: "Unauthorized." }, 401);
   }
 
-  if (!env.AI_API_KEY) {
-    return json(
-      { error: "Missing AI_API_KEY. Set it in Cloudflare Pages environment variables." },
-      500,
-    );
-  }
-
   const body = await readJson<ChatBody>(request);
   if (!body) {
     return json({ error: "Invalid JSON body." }, 400);
@@ -239,10 +233,21 @@ export const onRequestPost = async ({
     });
   }
 
-  const allowedModels = getAllowedModels(env);
-  const selectedModel = allowedModels.includes(body.model || "")
+  const providerState = await readProviderState(env, username);
+  const activeProvider = resolveActiveProvider(providerState, body.providerId?.trim());
+  if (!activeProvider) {
+    return json({ error: "No enabled provider. Configure one in /nangua." }, 400);
+  }
+
+  if (!activeProvider.apiKey) {
+    return json({ error: "Selected provider is missing API key." }, 400);
+  }
+
+  const selectedModel = activeProvider.models.includes(body.model || "")
     ? (body.model as string)
-    : env.AI_MODEL || defaultModel;
+    : providerState.activeModelByProvider[activeProvider.id] ||
+      activeProvider.models[0] ||
+      defaultModel;
   const selectedMode = body.mode || defaultMode;
 
   const systemPrompt = [
@@ -264,16 +269,19 @@ export const onRequestPost = async ({
 
   let upstreamResponse: Response;
   try {
-    upstreamResponse = await fetch(env.AI_BASE_URL || defaultBaseUrl, {
+    upstreamResponse = await fetch(
+      buildProviderEndpoint(activeProvider.baseUrl, "chat"),
+      {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${env.AI_API_KEY}`,
+          Authorization: `Bearer ${activeProvider.apiKey}`,
       },
       body: JSON.stringify(
         buildUpstreamRequestBody(selectedModel, normalizedMessages, systemPrompt, true),
       ),
-    });
+      },
+    );
   } catch (networkError) {
     return json(
       {
@@ -291,7 +299,7 @@ export const onRequestPost = async ({
       {
         error:
           (await parseUpstreamError(upstreamResponse)) ||
-          "Model request failed. Check AI_BASE_URL, AI_MODEL, and AI_API_KEY.",
+          "Model request failed. Check provider base URL, model and API key in /nangua.",
       },
       upstreamResponse.status || 500,
     );
@@ -372,11 +380,13 @@ export const onRequestPost = async ({
         }
 
         if (!fullReply.trim() && !request.signal.aborted) {
-          const fallbackResponse = await fetch(env.AI_BASE_URL || defaultBaseUrl, {
+          const fallbackResponse = await fetch(
+            buildProviderEndpoint(activeProvider.baseUrl, "chat"),
+            {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              Authorization: `Bearer ${env.AI_API_KEY}`,
+                Authorization: `Bearer ${activeProvider.apiKey}`,
             },
             body: JSON.stringify(
               buildUpstreamRequestBody(
@@ -386,7 +396,8 @@ export const onRequestPost = async ({
                 false,
               ),
             ),
-          });
+            },
+          );
 
           if (!fallbackResponse.ok) {
             throw new Error(await parseUpstreamError(fallbackResponse));

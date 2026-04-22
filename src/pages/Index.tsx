@@ -55,6 +55,10 @@ type SessionPayload = {
   authenticated: boolean;
   username: string;
   models: string[];
+  providers?: ProviderPayload[];
+  activeProviderId?: string | null;
+  activeModelByProvider?: Record<string, string>;
+  selectedModel?: string;
   conversation?: ConversationPayload;
   conversations?: ConversationSummary[];
   activeConversationId?: string;
@@ -66,6 +70,18 @@ type ConversationApiResponse = {
   conversations?: ConversationSummary[];
   activeConversationId?: string;
   activeConversation?: ConversationPayload | null;
+};
+
+type ProviderPayload = {
+  id: string;
+  name: string;
+  baseUrl: string;
+  enabled: boolean;
+  models: string[];
+  updatedAt: string;
+  lastModelSyncAt?: string;
+  hasApiKey: boolean;
+  apiKeyMasked: string;
 };
 
 const suggestions = [
@@ -147,6 +163,8 @@ const Index = () => {
   const [authenticated, setAuthenticated] = useState(false);
   const [username, setUsername] = useState("demo");
   const [availableModels, setAvailableModels] = useState<string[]>(["gpt-4o-mini"]);
+  const [availableProviders, setAvailableProviders] = useState<ProviderPayload[]>([]);
+  const [selectedProviderId, setSelectedProviderId] = useState("");
   const [selectedModel, setSelectedModel] = useState("gpt-4o-mini");
   const [selectedMode, setSelectedMode] = useState<ChatMode>("chat");
   const [conversationId, setConversationId] = useState("");
@@ -155,6 +173,7 @@ const Index = () => {
   const [imageDataUrl, setImageDataUrl] = useState("");
   const [imageName, setImageName] = useState("");
   const [showModelMenu, setShowModelMenu] = useState(false);
+  const [showProviderMenu, setShowProviderMenu] = useState(false);
   const [showToolMenu, setShowToolMenu] = useState(false);
   const [editingConversationId, setEditingConversationId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
@@ -224,8 +243,23 @@ const Index = () => {
       try {
         const response = await fetch("/api/session");
         const data = await parseJsonResponse<SessionPayload>(response, "/api/session");
-        setAvailableModels(data.models || ["gpt-4o-mini"]);
-        setSelectedModel(data.conversation?.model || data.models?.[0] || "gpt-4o-mini");
+        const providers = data.providers || [];
+        const activeProviderId =
+          data.activeProviderId ||
+          providers.find((provider) => provider.enabled)?.id ||
+          "";
+        const selectedProvider = providers.find((provider) => provider.id === activeProviderId);
+        const fallbackModel =
+          (activeProviderId &&
+            data.activeModelByProvider?.[activeProviderId]) ||
+          selectedProvider?.models?.[0] ||
+          data.models?.[0] ||
+          "gpt-4o-mini";
+
+        setAvailableProviders(providers);
+        setSelectedProviderId(activeProviderId);
+        setAvailableModels(selectedProvider?.models || data.models || ["gpt-4o-mini"]);
+        setSelectedModel(data.conversation?.model || data.selectedModel || fallbackModel);
         setSelectedMode(data.conversation?.mode || "chat");
         setUsername(data.username || "demo");
         setConversations(data.conversations || []);
@@ -258,6 +292,28 @@ const Index = () => {
   }, [navigate]);
 
   const showConversation = messages.length > 0 || isLoading || error;
+
+  const selectedProvider = availableProviders.find((provider) => provider.id === selectedProviderId);
+
+  const persistProviderSelection = async (providerId: string, model?: string) => {
+    const response = await fetch("/api/nangua/providers/select", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        providerId,
+        ...(model ? { model } : {}),
+      }),
+    });
+    if (!response.ok) {
+      const data = await parseJsonResponse<{ error?: string }>(
+        response,
+        "/api/nangua/providers/select",
+      );
+      throw new Error(data.error || "Unable to switch provider.");
+    }
+  };
 
   const applyConversationPayload = (payload: ConversationApiResponse) => {
     if (payload.conversation) {
@@ -332,6 +388,7 @@ const Index = () => {
         body: JSON.stringify({
           conversationId,
           messages: nextMessages,
+          providerId: selectedProviderId,
           model: selectedModel,
           mode: selectedMode,
           researchEnabled,
@@ -854,6 +911,49 @@ const Index = () => {
               </button>
             )}
             <button
+              onClick={() => setShowProviderMenu((open) => !open)}
+              className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium hover:bg-accent sm:px-3 sm:text-sm"
+            >
+              {selectedProvider?.name || "Provider"}
+              <ChevronDown className="size-4 text-muted-foreground" />
+            </button>
+            {showProviderMenu && (
+              <div className="absolute top-full left-0 mt-2 w-52 rounded-2xl border border-border bg-background shadow-lg p-2 z-20">
+                {availableProviders.length === 0 ? (
+                  <div className="px-3 py-2 text-xs text-muted-foreground">
+                    No providers configured.
+                  </div>
+                ) : (
+                  availableProviders.map((provider) => (
+                    <button
+                      key={provider.id}
+                      onClick={() => {
+                        const nextModel = provider.models[0] || "";
+                        setSelectedProviderId(provider.id);
+                        setAvailableModels(provider.models || []);
+                        if (nextModel) {
+                          setSelectedModel(nextModel);
+                        }
+                        setShowProviderMenu(false);
+                        void persistProviderSelection(provider.id, nextModel).catch((selectionError) =>
+                          setError(
+                            selectionError instanceof Error
+                              ? selectionError.message
+                              : "Unable to switch provider.",
+                          ),
+                        );
+                      }}
+                      className={`w-full text-left px-3 py-2 rounded-xl text-sm hover:bg-accent ${
+                        selectedProviderId === provider.id ? "bg-accent" : ""
+                      }`}
+                    >
+                      {provider.name}
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
+            <button
               onClick={() => setShowModelMenu((open) => !open)}
               className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-sm font-semibold hover:bg-accent sm:px-3 sm:text-base"
             >
@@ -868,6 +968,15 @@ const Index = () => {
                     onClick={() => {
                       setSelectedModel(model);
                       setShowModelMenu(false);
+                      if (selectedProviderId) {
+                        void persistProviderSelection(selectedProviderId, model).catch((selectionError) =>
+                          setError(
+                            selectionError instanceof Error
+                              ? selectionError.message
+                              : "Unable to switch model.",
+                          ),
+                        );
+                      }
                     }}
                     className={`w-full text-left px-3 py-2 rounded-xl text-sm hover:bg-accent ${
                       selectedModel === model ? "bg-accent" : ""

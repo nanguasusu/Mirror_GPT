@@ -18,6 +18,7 @@ export interface Env {
 
 export type ChatRole = "user" | "assistant";
 export type ChatMode = "chat" | "code" | "translate" | "writing" | "research";
+export type ProviderEndpointType = "models" | "chat" | "embeddings";
 
 export type StoredMessage = {
   id: string;
@@ -46,11 +47,29 @@ export type StoredConversationIndex = {
   conversations: StoredConversationSummary[];
 };
 
+export type StoredProvider = {
+  id: string;
+  name: string;
+  baseUrl: string;
+  apiKey: string;
+  enabled: boolean;
+  models: string[];
+  updatedAt: string;
+  lastModelSyncAt?: string;
+};
+
+export type StoredProviderState = {
+  activeProviderId: string | null;
+  activeModelByProvider: Record<string, string>;
+  providers: StoredProvider[];
+};
+
 const COOKIE_NAME = "demo_session";
 const SESSION_MAX_AGE = 60 * 60 * 24 * 7;
 const DEFAULT_MODELS = ["gpt-4o-mini", "gpt-4.1-mini", "gpt-4.1"];
 
 const encoder = new TextEncoder();
+const ENV_PROVIDER_ID = "env-default";
 
 export const defaultModel = "gpt-4o-mini";
 export const defaultMode: ChatMode = "chat";
@@ -101,6 +120,173 @@ export const getConversationKey = (username: string) => `conversation:${username
 export const getConversationItemKey = (username: string, conversationId: string) =>
   `conversation:${username}:${conversationId}`;
 export const getConversationIndexKey = (username: string) => `conversation-index:${username}`;
+export const getProviderStateKey = (username: string) => `provider-state:${username}`;
+
+export const normalizeProviderBaseUrl = (rawBaseUrl: string) => {
+  const trimmed = rawBaseUrl.trim();
+  if (!trimmed) {
+    throw new Error("baseUrl is required.");
+  }
+
+  let normalized = trimmed
+    .replace(/\/chat\/completions\/?$/i, "")
+    .replace(/\/models\/?$/i, "")
+    .replace(/\/embeddings\/?$/i, "")
+    .replace(/\/+$/, "");
+
+  if (!/^https?:\/\//i.test(normalized)) {
+    normalized = `https://${normalized}`;
+  }
+
+  const parsed = new URL(normalized);
+  const pathname = parsed.pathname.replace(/\/+$/, "");
+  parsed.pathname = pathname.endsWith("/v1")
+    ? pathname || "/v1"
+    : `${pathname || ""}/v1`;
+
+  return parsed.toString().replace(/\/+$/, "");
+};
+
+export const buildProviderEndpoint = (
+  baseUrl: string,
+  endpoint: ProviderEndpointType,
+) => `${baseUrl}/${endpoint === "chat" ? "chat/completions" : endpoint}`;
+
+const createEnvProvider = (env: Env): StoredProvider | null => {
+  if (!env.AI_BASE_URL || !env.AI_API_KEY) {
+    return null;
+  }
+
+  let baseUrl = "";
+  try {
+    baseUrl = normalizeProviderBaseUrl(env.AI_BASE_URL);
+  } catch {
+    return null;
+  }
+
+  const models = getAllowedModels(env);
+  return {
+    id: ENV_PROVIDER_ID,
+    name: "Default Provider",
+    baseUrl,
+    apiKey: env.AI_API_KEY,
+    enabled: true,
+    models,
+    updatedAt: new Date().toISOString(),
+    lastModelSyncAt: undefined,
+  };
+};
+
+export const sanitizeProvider = (provider: StoredProvider) => ({
+  id: provider.id,
+  name: provider.name,
+  baseUrl: provider.baseUrl,
+  enabled: provider.enabled,
+  models: provider.models,
+  updatedAt: provider.updatedAt,
+  lastModelSyncAt: provider.lastModelSyncAt,
+  hasApiKey: Boolean(provider.apiKey),
+  apiKeyMasked: provider.apiKey
+    ? `${provider.apiKey.slice(0, 4)}...${provider.apiKey.slice(-4)}`
+    : "",
+});
+
+const getEmptyProviderState = (): StoredProviderState => ({
+  activeProviderId: null,
+  activeModelByProvider: {},
+  providers: [],
+});
+
+export const readProviderState = async (env: Env, username: string) => {
+  const raw = await env.CHAT_KV?.get(getProviderStateKey(username));
+  let state: StoredProviderState = getEmptyProviderState();
+
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as Partial<StoredProviderState>;
+      state = {
+        activeProviderId:
+          typeof parsed.activeProviderId === "string" ? parsed.activeProviderId : null,
+        activeModelByProvider:
+          parsed.activeModelByProvider && typeof parsed.activeModelByProvider === "object"
+            ? (parsed.activeModelByProvider as Record<string, string>)
+            : {},
+        providers: Array.isArray(parsed.providers)
+          ? parsed.providers
+              .filter((item) => item && typeof item === "object")
+              .map((item) => {
+                const provider = item as Partial<StoredProvider>;
+                return {
+                  id: provider.id || crypto.randomUUID(),
+                  name: provider.name?.trim() || "Provider",
+                  baseUrl: provider.baseUrl || "",
+                  apiKey: provider.apiKey || "",
+                  enabled: provider.enabled !== false,
+                  models: Array.isArray(provider.models)
+                    ? provider.models.filter((model) => typeof model === "string")
+                    : [],
+                  updatedAt: provider.updatedAt || new Date().toISOString(),
+                  lastModelSyncAt: provider.lastModelSyncAt,
+                } satisfies StoredProvider;
+              })
+          : [],
+      };
+    } catch {
+      state = getEmptyProviderState();
+    }
+  }
+
+  const envProvider = createEnvProvider(env);
+  if (state.providers.length === 0 && envProvider) {
+    return {
+      activeProviderId: envProvider.id,
+      activeModelByProvider: {
+        [envProvider.id]: env.AI_MODEL || envProvider.models[0] || defaultModel,
+      },
+      providers: [envProvider],
+    } satisfies StoredProviderState;
+  }
+
+  return state;
+};
+
+export const writeProviderState = async (
+  env: Env,
+  username: string,
+  state: StoredProviderState,
+) => {
+  if (!env.CHAT_KV) {
+    return;
+  }
+
+  await env.CHAT_KV.put(getProviderStateKey(username), JSON.stringify(state));
+};
+
+export const resolveActiveProvider = (
+  state: StoredProviderState,
+  preferredProviderId?: string,
+) => {
+  const enabledProviders = state.providers.filter((provider) => provider.enabled);
+  if (enabledProviders.length === 0) {
+    return null;
+  }
+
+  if (preferredProviderId) {
+    const preferred = enabledProviders.find((provider) => provider.id === preferredProviderId);
+    if (preferred) {
+      return preferred;
+    }
+  }
+
+  if (state.activeProviderId) {
+    const active = enabledProviders.find((provider) => provider.id === state.activeProviderId);
+    if (active) {
+      return active;
+    }
+  }
+
+  return enabledProviders[0];
+};
 
 export const createConversationTitle = (messages: StoredMessage[]) => {
   const firstUserMessage = messages.find((message) => message.role === "user");
