@@ -3,6 +3,7 @@ import {
   getAuthenticatedUser,
   json,
   readConversationIndex,
+  resolvePreferredModelForUser,
   type Env,
 } from "../_shared";
 
@@ -18,7 +19,8 @@ export const onRequestPost = async ({
     return json({ error: "Unauthorized." }, 401);
   }
 
-  const conversation = await createConversation(env, username);
+  const preferredModel = await resolvePreferredModelForUser(env, username);
+  const conversation = await createConversation(env, username, { preferredModel });
   const index = await readConversationIndex(env, username);
   return json({
     ok: true,

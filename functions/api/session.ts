@@ -6,6 +6,7 @@ import {
   readConversation,
   readConversationIndex,
   readProviderState,
+  resolvePreferredModelForUser,
   resolveActiveProvider,
   sanitizeProvider,
   type Env,
@@ -42,11 +43,16 @@ export const onRequestGet = async ({
       providerState.activeModelByProvider[activeProvider.id]) ||
     activeProvider?.models[0] ||
     "";
+  const preferredModel = await resolvePreferredModelForUser(
+    env,
+    username,
+    activeProvider?.id,
+  );
 
   const conversation =
     index.activeConversationId || index.conversations.length > 0
       ? await readConversation(env, username)
-      : await createConversation(env, username);
+      : await createConversation(env, username, { preferredModel });
   const nextIndex = await readConversationIndex(env, username);
   return json({
     authenticated: true,

@@ -28,7 +28,6 @@ Add a KV namespace binding in Pages:
 
 - `AI_API_KEY`: your upstream model API key
 - `AI_BASE_URL`: full chat completions endpoint
-- `AI_MODEL`: default model name
 - `AI_MODELS`: comma-separated model whitelist shown in the UI
 - `AI_SYSTEM_PROMPT`: optional system prompt
 - `DEMO_USERNAME`: fixed login username
@@ -40,7 +39,6 @@ Example:
 ```env
 AI_API_KEY=your_api_key
 AI_BASE_URL=https://api.openai.com/v1/chat/completions
-AI_MODEL=gpt-4o-mini
 AI_MODELS=gpt-4o-mini,gpt-4.1-mini,gpt-4.1
 AI_SYSTEM_PROMPT=You are a concise and helpful AI assistant for a personal demo site.
 DEMO_USERNAME=demo

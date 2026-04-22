@@ -7,7 +7,6 @@ export interface KVNamespaceLike {
 export interface Env {
   AI_API_KEY?: string;
   AI_BASE_URL?: string;
-  AI_MODEL?: string;
   AI_MODELS?: string;
   AI_SYSTEM_PROMPT?: string;
   DEMO_USERNAME?: string;
@@ -241,7 +240,7 @@ export const readProviderState = async (env: Env, username: string) => {
     return {
       activeProviderId: envProvider.id,
       activeModelByProvider: {
-        [envProvider.id]: env.AI_MODEL || envProvider.models[0] || defaultModel,
+        [envProvider.id]: envProvider.models[0] || defaultModel,
       },
       providers: [envProvider],
     } satisfies StoredProviderState;
@@ -310,7 +309,7 @@ const createEmptyConversation = (env: Env, id?: string) =>
     id: id || crypto.randomUUID(),
     title: "New chat",
     messages: [],
-    model: env.AI_MODEL || defaultModel,
+    model: defaultModel,
     mode: defaultMode,
     updatedAt: new Date().toISOString(),
   }) satisfies StoredConversation;
@@ -366,6 +365,9 @@ export const readConversationById = async (
   env: Env,
   username: string,
   conversationId: string,
+  options?: {
+    fallbackModel?: string;
+  },
 ) => {
   const raw = await env.CHAT_KV?.get(getConversationItemKey(username, conversationId));
   if (!raw) {
@@ -378,12 +380,15 @@ export const readConversationById = async (
       id: parsed.id || conversationId,
       title: parsed.title || "New chat",
       messages: Array.isArray(parsed.messages) ? parsed.messages : [],
-      model: parsed.model || env.AI_MODEL || defaultModel,
+      model: parsed.model || options?.fallbackModel || defaultModel,
       mode: parsed.mode || defaultMode,
       updatedAt: parsed.updatedAt || new Date().toISOString(),
     } satisfies StoredConversation;
   } catch {
-    return createEmptyConversation(env, conversationId);
+    return {
+      ...createEmptyConversation(env, conversationId),
+      model: options?.fallbackModel || defaultModel,
+    };
   }
 };
 
@@ -453,8 +458,35 @@ export const setActiveConversation = async (
   });
 };
 
-export const createConversation = async (env: Env, username: string) => {
-  const conversation = createEmptyConversation(env);
+export const resolvePreferredModelForUser = async (
+  env: Env,
+  username: string,
+  preferredProviderId?: string,
+) => {
+  const providerState = await readProviderState(env, username);
+  const activeProvider = resolveActiveProvider(providerState, preferredProviderId);
+  if (!activeProvider) {
+    return defaultModel;
+  }
+
+  return (
+    providerState.activeModelByProvider[activeProvider.id] ||
+    activeProvider.models[0] ||
+    defaultModel
+  );
+};
+
+export const createConversation = async (
+  env: Env,
+  username: string,
+  options?: {
+    preferredModel?: string;
+  },
+) => {
+  const conversation = {
+    ...createEmptyConversation(env),
+    model: options?.preferredModel || defaultModel,
+  };
   await writeConversation(env, username, conversation);
   return conversation;
 };

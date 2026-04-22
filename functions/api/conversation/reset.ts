@@ -3,6 +3,7 @@ import {
   createConversation,
   getAuthenticatedUser,
   json,
+  resolvePreferredModelForUser,
   type Env,
 } from "../_shared";
 
@@ -19,6 +20,7 @@ export const onRequestPost = async ({
   }
 
   await clearConversation(env, username);
-  const conversation = await createConversation(env, username);
+  const preferredModel = await resolvePreferredModelForUser(env, username);
+  const conversation = await createConversation(env, username, { preferredModel });
   return json({ ok: true, conversation });
 };

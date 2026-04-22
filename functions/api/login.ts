@@ -7,6 +7,7 @@ import {
   readConversation,
   readConversationIndex,
   readJson,
+  resolvePreferredModelForUser,
   type Env,
 } from "./_shared";
 
@@ -39,10 +40,11 @@ export const onRequestPost = async ({
 
   const conversation = await readConversation(env, username);
   const index = await readConversationIndex(env, username);
+  const preferredModel = await resolvePreferredModelForUser(env, username);
   const activeConversation =
     index.activeConversationId || index.conversations.length > 0
       ? conversation
-      : await createConversation(env, username);
+      : await createConversation(env, username, { preferredModel });
   const nextIndex = await readConversationIndex(env, username);
   return json(
     {

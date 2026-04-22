@@ -227,7 +227,7 @@ export const onRequestPost = async ({
       id: conversationId,
       title: "",
       messages: [],
-      model: env.AI_MODEL || defaultModel,
+      model: defaultModel,
       mode: defaultMode,
       updatedAt: new Date().toISOString(),
     });

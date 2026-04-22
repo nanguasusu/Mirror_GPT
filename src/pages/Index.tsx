@@ -1,4 +1,4 @@
-import { ChangeEvent, FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";
 import {
   ArrowUp,
   Check,
@@ -184,6 +184,7 @@ const Index = () => {
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const headerMenuRef = useRef<HTMLDivElement | null>(null);
   const messagesRef = useRef<ChatMessage[]>([]);
   const scrollAreaRef = useRef<HTMLElement | null>(null);
   const endOfMessagesRef = useRef<HTMLDivElement | null>(null);
@@ -237,6 +238,38 @@ const Index = () => {
       behavior: "auto",
     });
   }, [messages, isLoading]);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target) {
+        return;
+      }
+
+      if (headerMenuRef.current?.contains(target)) {
+        return;
+      }
+
+      setShowModelMenu(false);
+      setShowProviderMenu(false);
+    };
+
+    const handleEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape") {
+        return;
+      }
+      setShowModelMenu(false);
+      setShowProviderMenu(false);
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleEscape);
+
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, []);
 
   useEffect(() => {
     const loadSession = async () => {
@@ -512,7 +545,7 @@ const Index = () => {
     await sendMessage();
   };
 
-  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       void sendMessage();
@@ -900,7 +933,7 @@ const Index = () => {
 
       <main className="flex-1 flex min-w-0 flex-col">
         <header className="sticky top-0 z-20 flex items-center justify-between border-b border-border/60 bg-background/95 px-2 py-2 backdrop-blur sm:px-3">
-          <div className="flex items-center gap-2 relative">
+          <div ref={headerMenuRef} className="flex items-center gap-2 relative">
             {(!sidebarOpen || isMobile) && (
               <button
                 onClick={() => setSidebarOpen(true)}
@@ -911,82 +944,108 @@ const Index = () => {
               </button>
             )}
             <button
-              onClick={() => setShowProviderMenu((open) => !open)}
+              onClick={() =>
+                setShowProviderMenu((open) => {
+                  const next = !open;
+                  if (next) {
+                    setShowModelMenu(false);
+                  }
+                  return next;
+                })
+              }
               className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium hover:bg-accent sm:px-3 sm:text-sm"
             >
               {selectedProvider?.name || "Provider"}
               <ChevronDown className="size-4 text-muted-foreground" />
             </button>
-            {showProviderMenu && (
-              <div className="absolute top-full left-0 mt-2 max-h-72 w-52 overflow-y-auto rounded-2xl border border-border bg-background p-2 shadow-lg z-20">
-                {availableProviders.length === 0 ? (
-                  <div className="px-3 py-2 text-xs text-muted-foreground">
-                    No providers configured.
-                  </div>
-                ) : (
-                  availableProviders.map((provider) => (
-                    <button
-                      key={provider.id}
-                      onClick={() => {
-                        const nextModel = provider.models[0] || "";
-                        setSelectedProviderId(provider.id);
-                        setAvailableModels(provider.models || []);
-                        if (nextModel) {
-                          setSelectedModel(nextModel);
-                        }
-                        setShowProviderMenu(false);
-                        void persistProviderSelection(provider.id, nextModel).catch((selectionError) =>
-                          setError(
-                            selectionError instanceof Error
-                              ? selectionError.message
-                              : "Unable to switch provider.",
-                          ),
-                        );
-                      }}
-                      className={`w-full text-left px-3 py-2 rounded-xl text-sm hover:bg-accent ${
-                        selectedProviderId === provider.id ? "bg-accent" : ""
-                      }`}
-                    >
-                      {provider.name}
-                    </button>
-                  ))
-                )}
-              </div>
-            )}
+            <div
+              className={`absolute top-full left-0 mt-2 max-h-72 w-52 overflow-y-auto rounded-2xl border border-border bg-background p-2 shadow-lg z-20 origin-top-left transition-all duration-150 ${
+                showProviderMenu
+                  ? "opacity-100 scale-100 translate-y-0 pointer-events-auto"
+                  : "opacity-0 scale-95 -translate-y-1 pointer-events-none"
+              }`}
+            >
+              {availableProviders.length === 0 ? (
+                <div className="px-3 py-2 text-xs text-muted-foreground">
+                  No providers configured.
+                </div>
+              ) : (
+                availableProviders.map((provider) => (
+                  <button
+                    key={provider.id}
+                    onClick={() => {
+                      const nextModel = provider.models[0] || "";
+                      setSelectedProviderId(provider.id);
+                      setAvailableModels(provider.models || []);
+                      if (nextModel) {
+                        setSelectedModel(nextModel);
+                      }
+                      setShowProviderMenu(false);
+                      setShowModelMenu(false);
+                      void persistProviderSelection(provider.id, nextModel).catch((selectionError) =>
+                        setError(
+                          selectionError instanceof Error
+                            ? selectionError.message
+                            : "Unable to switch provider.",
+                        ),
+                      );
+                    }}
+                    className={`w-full text-left px-3 py-2 rounded-xl text-sm hover:bg-accent ${
+                      selectedProviderId === provider.id ? "bg-accent" : ""
+                    }`}
+                  >
+                    {provider.name}
+                  </button>
+                ))
+              )}
+            </div>
             <button
-              onClick={() => setShowModelMenu((open) => !open)}
+              onClick={() =>
+                setShowModelMenu((open) => {
+                  const next = !open;
+                  if (next) {
+                    setShowProviderMenu(false);
+                  }
+                  return next;
+                })
+              }
               className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-sm font-semibold hover:bg-accent sm:px-3 sm:text-base"
             >
               {selectedModel}
               <ChevronDown className="size-4 text-muted-foreground" />
             </button>
-            {showModelMenu && (
-              <div className="absolute top-full left-0 mt-2 max-h-72 w-56 overflow-y-auto rounded-2xl border border-border bg-background p-2 shadow-lg z-20">
-                {availableModels.map((model) => (
-                  <button
-                    key={model}
-                    onClick={() => {
-                      setSelectedModel(model);
-                      setShowModelMenu(false);
-                      if (selectedProviderId) {
-                        void persistProviderSelection(selectedProviderId, model).catch((selectionError) =>
-                          setError(
-                            selectionError instanceof Error
-                              ? selectionError.message
-                              : "Unable to switch model.",
-                          ),
-                        );
-                      }
-                    }}
-                    className={`w-full text-left px-3 py-2 rounded-xl text-sm hover:bg-accent ${
-                      selectedModel === model ? "bg-accent" : ""
-                    }`}
-                  >
-                    {model}
-                  </button>
-                ))}
-              </div>
-            )}
+            <div
+              className={`absolute top-full left-0 mt-2 max-h-72 w-56 overflow-y-auto rounded-2xl border border-border bg-background p-2 shadow-lg z-20 origin-top-left transition-all duration-150 ${
+                showModelMenu
+                  ? "opacity-100 scale-100 translate-y-0 pointer-events-auto"
+                  : "opacity-0 scale-95 -translate-y-1 pointer-events-none"
+              }`}
+            >
+              {availableModels.map((model) => (
+                <button
+                  key={model}
+                  onClick={() => {
+                    setSelectedModel(model);
+                    setShowModelMenu(false);
+                    setShowProviderMenu(false);
+                    if (selectedProviderId) {
+                      void persistProviderSelection(selectedProviderId, model).catch((selectionError) =>
+                        setError(
+                          selectionError instanceof Error
+                            ? selectionError.message
+                            : "Unable to switch model.",
+                        ),
+                      );
+                    }
+                  }}
+                  className={`w-full text-left px-3 py-2 rounded-xl text-sm hover:bg-accent ${
+                    selectedModel === model ? "bg-accent" : ""
+                  }`}
+                >
+                  {model}
+                </button>
+              ))}
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <Button variant="outline" className="rounded-full h-9 hidden sm:inline-flex">
