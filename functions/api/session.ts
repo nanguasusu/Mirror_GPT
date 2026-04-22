@@ -23,6 +23,7 @@ export const onRequestGet = async ({
         authenticated: false,
         username: getDefaultUsername(env),
         models: getAllowedModels(env),
+        kvBound: Boolean(env.CHAT_KV),
       },
       200,
     );
@@ -41,5 +42,6 @@ export const onRequestGet = async ({
     conversations: nextIndex.conversations,
     activeConversationId: nextIndex.activeConversationId || conversation.id,
     models: getAllowedModels(env),
+    kvBound: Boolean(env.CHAT_KV),
   });
 };
