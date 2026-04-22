@@ -858,58 +858,97 @@ const Index = () => {
           </div>
         </header>
 
-        <section
-          ref={scrollAreaRef}
-          onScroll={handleChatScroll}
-          className="flex-1 overflow-y-auto px-2 sm:px-4"
-        >
-          <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col pb-3 pt-4 sm:py-8">
-            {loadingSession ? (
-              <div className="flex-1 flex items-center justify-center text-sm text-muted-foreground">
-                Loading session...
-              </div>
-            ) : !showConversation ? (
-              <>
-                <h1 className="mb-8 text-center text-3xl font-semibold tracking-tight sm:text-4xl">
-                  How can I help?
-                </h1>
+        <section className="flex-1 overflow-hidden px-2 sm:px-4">
+          <div className="mx-auto flex h-full w-full max-w-3xl flex-col">
+            <div
+              ref={scrollAreaRef}
+              onScroll={handleChatScroll}
+              className="flex-1 overflow-y-auto pb-3 pt-4 sm:py-8"
+            >
+              {loadingSession ? (
+                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                  Loading session...
+                </div>
+              ) : !showConversation ? (
+                <div className="flex min-h-full flex-col">
+                  <h1 className="mb-8 text-center text-3xl font-semibold tracking-tight sm:text-4xl">
+                    How can I help?
+                  </h1>
+                  <div className="mt-auto" />
+                  {authenticated && (
+                    <>
+                      <div className="mt-5 flex flex-wrap justify-center gap-2 px-1">
+                        {suggestions.map((suggestion) => (
+                          <button
+                            key={suggestion.label}
+                            onClick={() => setInput(suggestion.label)}
+                            className="flex items-center gap-2 rounded-full border border-border bg-background px-4 py-2 text-sm transition-colors hover:bg-accent"
+                          >
+                            <suggestion.icon className={`size-4 ${suggestion.color}`} />
+                            <span>{suggestion.label}</span>
+                          </button>
+                        ))}
+                        <button
+                          onClick={() => void handleRegenerate()}
+                          className="flex items-center gap-2 rounded-full border border-border bg-background px-4 py-2 text-sm transition-colors hover:bg-accent"
+                        >
+                          Retry last
+                        </button>
+                      </div>
 
-                <div className="mt-auto" />
-              </>
-            ) : (
-              <div className="mb-4 space-y-4 sm:mb-6 sm:space-y-6">
-                {messages.map((message) => (
-                  <div
-                    key={message.id}
-                    className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
-                  >
+                      <p className="mt-8 max-w-xl text-center text-xs text-muted-foreground">
+                        This demo supports streaming replies, cloud-saved history, model switching, and image input.
+                      </p>
+                    </>
+                  )}
+                </div>
+              ) : (
+                <div className="mb-4 space-y-4 sm:mb-6 sm:space-y-6">
+                  {messages.map((message) => (
                     <div
-                      className={`max-w-[92%] rounded-3xl px-4 py-3 text-sm leading-7 shadow-sm sm:max-w-[85%] sm:px-5 sm:py-4 ${
-                        message.role === "user"
-                          ? "bg-primary text-primary-foreground"
-                          : "bg-secondary text-secondary-foreground"
-                      }`}
+                      key={message.id}
+                      className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
                     >
-                      {message.imageDataUrl && (
-                        <img
-                          src={message.imageDataUrl}
-                          alt="Uploaded"
-                          className="mb-3 max-h-64 rounded-2xl border border-white/10 object-cover"
-                        />
-                      )}
-                      {message.content || "Image attached"}
+                      <div
+                        className={`max-w-[92%] rounded-3xl px-4 py-3 text-sm leading-7 shadow-sm sm:max-w-[85%] sm:px-5 sm:py-4 ${
+                          message.role === "user"
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-secondary text-secondary-foreground"
+                        }`}
+                      >
+                        {message.imageDataUrl && (
+                          <img
+                            src={message.imageDataUrl}
+                            alt="Uploaded"
+                            className="mb-3 max-h-64 rounded-2xl border border-white/10 object-cover"
+                          />
+                        )}
+                        {message.content || "Image attached"}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))}
 
-                {error && (
-                  <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                    {error}
-                  </div>
-                )}
-                <div ref={endOfMessagesRef} />
-              </div>
-            )}
+                  {error && (
+                    <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                      {error}
+                    </div>
+                  )}
+
+                  {authenticated && showConversation && !isLoading && (
+                    <div className="mt-5 flex justify-center">
+                      <button
+                        onClick={() => void handleRegenerate()}
+                        className="rounded-full border border-border bg-background px-4 py-2 text-sm transition-colors hover:bg-accent"
+                      >
+                        Regenerate response
+                      </button>
+                    </div>
+                  )}
+
+                  <div ref={endOfMessagesRef} />
+                </div>
+              )}
+            </div>
 
             {authenticated && (
               <form
@@ -917,12 +956,12 @@ const Index = () => {
                 style={{
                   paddingBottom: `calc(max(env(safe-area-inset-bottom), 8px) + ${keyboardOffset}px)`,
                 }}
-                className="sticky bottom-0 z-10"
+                className="z-10 border-t border-border/40 bg-background/95 py-2 backdrop-blur"
               >
                 {imageDataUrl && (
                   <div className="mb-3 rounded-3xl border border-border bg-card p-3">
                     <div className="flex items-start justify-between gap-3">
-                      <div className="flex items-center gap-3 min-w-0">
+                      <div className="flex min-w-0 items-center gap-3">
                         <img
                           src={imageDataUrl}
                           alt="Preview"
@@ -938,7 +977,7 @@ const Index = () => {
                       <button
                         type="button"
                         onClick={clearImage}
-                        className="p-2 rounded-lg hover:bg-accent"
+                        className="rounded-lg p-2 hover:bg-accent"
                         aria-label="Remove image"
                       >
                         <X className="size-4" />
@@ -958,10 +997,10 @@ const Index = () => {
                             setSelectedMode(mode.id);
                             setShowToolMenu(false);
                           }}
-                          className={`px-4 py-2 rounded-full border text-sm transition-colors ${
+                          className={`rounded-full border px-4 py-2 text-sm transition-colors ${
                             selectedMode === mode.id
-                              ? "bg-primary text-primary-foreground border-primary"
-                              : "bg-background hover:bg-accent border-border"
+                              ? "border-primary bg-primary text-primary-foreground"
+                              : "border-border bg-background hover:bg-accent"
                           }`}
                         >
                           {mode.label}
@@ -981,7 +1020,7 @@ const Index = () => {
                     className="w-full resize-none bg-transparent px-4 pb-2 pt-3 text-base outline-none placeholder:text-muted-foreground sm:px-5 sm:pt-4"
                   />
                   <div className="flex items-center justify-between px-2 pb-2 sm:px-3 sm:pb-3">
-                    <div className="flex items-center gap-1 relative">
+                    <div className="relative flex items-center gap-1">
                       <ComposerIcon
                         icon={Plus}
                         label="Image"
@@ -1006,7 +1045,7 @@ const Index = () => {
                         <button
                           type="button"
                           onClick={handleStopStreaming}
-                          className="size-9 rounded-full bg-secondary text-secondary-foreground flex items-center justify-center hover:opacity-90"
+                          className="flex size-9 items-center justify-center rounded-full bg-secondary text-secondary-foreground hover:opacity-90"
                           aria-label="Stop"
                         >
                           <Square className="size-4" />
@@ -1014,7 +1053,7 @@ const Index = () => {
                       ) : (
                         <button
                           type="submit"
-                          className="size-9 rounded-full bg-primary text-primary-foreground flex items-center justify-center hover:opacity-90 disabled:opacity-30"
+                          className="flex size-9 items-center justify-center rounded-full bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-30"
                           disabled={(!input.trim() && !imageDataUrl) || isLoading}
                           aria-label="Send"
                         >
@@ -1025,44 +1064,6 @@ const Index = () => {
                   </div>
                 </div>
               </form>
-            )}
-
-            {authenticated && !showConversation && (
-              <>
-                <div className="mt-5 flex flex-wrap justify-center gap-2 px-1">
-                  {suggestions.map((suggestion) => (
-                    <button
-                      key={suggestion.label}
-                      onClick={() => setInput(suggestion.label)}
-                      className="flex items-center gap-2 px-4 py-2 rounded-full border border-border bg-background hover:bg-accent text-sm transition-colors"
-                    >
-                      <suggestion.icon className={`size-4 ${suggestion.color}`} />
-                      <span>{suggestion.label}</span>
-                    </button>
-                  ))}
-                  <button
-                    onClick={() => void handleRegenerate()}
-                    className="flex items-center gap-2 px-4 py-2 rounded-full border border-border bg-background hover:bg-accent text-sm transition-colors"
-                  >
-                    Retry last
-                  </button>
-                </div>
-
-                <p className="mt-8 text-xs text-muted-foreground text-center max-w-xl">
-                  This demo supports streaming replies, cloud-saved history, model switching, and image input.
-                </p>
-              </>
-            )}
-
-            {authenticated && showConversation && !isLoading && (
-              <div className="mt-5 flex justify-center">
-                <button
-                  onClick={() => void handleRegenerate()}
-                  className="px-4 py-2 rounded-full border border-border bg-background hover:bg-accent text-sm transition-colors"
-                >
-                  Regenerate response
-                </button>
-              </div>
             )}
           </div>
         </section>

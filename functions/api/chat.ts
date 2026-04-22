@@ -155,7 +155,15 @@ export const onRequestPost = async ({
 
   const conversationIndex = await readConversationIndex(env, username);
   if (!conversationIndex.conversations.some((item) => item.id === conversationId)) {
-    return json({ error: "Conversation not found." }, 404);
+    // Repair inconsistent index/session state by recreating the requested conversation id.
+    await writeConversation(env, username, {
+      id: conversationId,
+      title: "",
+      messages: [],
+      model: env.AI_MODEL || defaultModel,
+      mode: defaultMode,
+      updatedAt: new Date().toISOString(),
+    });
   }
 
   const allowedModels = getAllowedModels(env);
