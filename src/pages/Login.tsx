@@ -35,6 +35,23 @@ type LoginPayload = {
   activeConversationId?: string;
 };
 
+async function parseJsonResponse<T>(response: Response, endpoint: string): Promise<T> {
+  const raw = await response.text();
+  const contentType = response.headers.get("content-type")?.toLowerCase() || "";
+
+  if (!contentType.includes("application/json")) {
+    throw new Error(
+      `API ${endpoint} returned non-JSON (${response.status}). Check Cloudflare Pages Functions route for /api/*.`,
+    );
+  }
+
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    throw new Error(`API ${endpoint} returned invalid JSON (${response.status}).`);
+  }
+}
+
 const Login = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -48,7 +65,7 @@ const Login = () => {
     const loadSession = async () => {
       try {
         const response = await fetch("/api/session");
-        const data = (await response.json()) as SessionPayload;
+        const data = await parseJsonResponse<SessionPayload>(response, "/api/session");
         setUsername(data.username || "demo");
         if (data.authenticated) {
           navigate(from, { replace: true });
@@ -77,7 +94,7 @@ const Login = () => {
         body: JSON.stringify({ username, password }),
       });
 
-      const data = (await response.json()) as LoginPayload;
+      const data = await parseJsonResponse<LoginPayload>(response, "/api/login");
       if (!response.ok || !data.ok) {
         throw new Error(data.error || "Login failed.");
       }

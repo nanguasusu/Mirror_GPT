@@ -117,6 +117,23 @@ const buildConversationTitle = (messages: ChatMessage[]) => {
   return "New chat";
 };
 
+async function parseJsonResponse<T>(response: Response, endpoint: string): Promise<T> {
+  const raw = await response.text();
+  const contentType = response.headers.get("content-type")?.toLowerCase() || "";
+
+  if (!contentType.includes("application/json")) {
+    throw new Error(
+      `API ${endpoint} returned non-JSON (${response.status}). Check Cloudflare Pages Functions route for /api/*.`,
+    );
+  }
+
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    throw new Error(`API ${endpoint} returned invalid JSON (${response.status}).`);
+  }
+}
+
 const Index = () => {
   const isMobile = useIsMobile();
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -204,7 +221,7 @@ const Index = () => {
     const loadSession = async () => {
       try {
         const response = await fetch("/api/session");
-        const data = (await response.json()) as SessionPayload;
+        const data = await parseJsonResponse<SessionPayload>(response, "/api/session");
         setAvailableModels(data.models || ["gpt-4o-mini"]);
         setSelectedModel(data.conversation?.model || data.models?.[0] || "gpt-4o-mini");
         setSelectedMode(data.conversation?.mode || "chat");
@@ -321,7 +338,7 @@ const Index = () => {
       });
 
       if (!response.ok) {
-        const data = (await response.json()) as { error?: string };
+        const data = await parseJsonResponse<{ error?: string }>(response, "/api/chat");
         throw new Error(data.error || "Request failed.");
       }
 
@@ -453,7 +470,10 @@ const Index = () => {
     abortControllerRef.current?.abort();
     if (authenticated) {
       const response = await fetch("/api/conversation/reset", { method: "POST" });
-      const data = (await response.json()) as { conversation?: ConversationPayload };
+      const data = await parseJsonResponse<{ conversation?: ConversationPayload }>(
+        response,
+        "/api/conversation/reset",
+      );
       setConversationId(data.conversation?.id || "");
       setMessages(data.conversation?.messages || []);
       if (data.conversation) {
@@ -505,11 +525,11 @@ const Index = () => {
     }
 
     const response = await fetch("/api/conversation/create", { method: "POST" });
-    const data = (await response.json()) as {
+    const data = await parseJsonResponse<{
       conversation?: ConversationPayload;
       conversations?: ConversationSummary[];
       activeConversationId?: string;
-    };
+    }>(response, "/api/conversation/create");
 
     setConversationId(data.activeConversationId || data.conversation?.id || "");
     setMessages(data.conversation?.messages || []);
@@ -537,12 +557,12 @@ const Index = () => {
       },
       body: JSON.stringify({ conversationId: targetConversationId }),
     });
-    const data = (await response.json()) as {
+    const data = await parseJsonResponse<{
       error?: string;
       conversation?: ConversationPayload;
       conversations?: ConversationSummary[];
       activeConversationId?: string;
-    };
+    }>(response, "/api/conversation/select");
 
     if (!response.ok) {
       setError(data.error || "Unable to switch conversation.");
@@ -580,7 +600,10 @@ const Index = () => {
           title,
         }),
       });
-      const data = (await response.json()) as ConversationApiResponse;
+      const data = await parseJsonResponse<ConversationApiResponse>(
+        response,
+        "/api/conversation/rename",
+      );
       if (!response.ok) {
         throw new Error(data.error || "Unable to rename conversation.");
       }
@@ -611,7 +634,10 @@ const Index = () => {
           conversationId: targetConversationId,
         }),
       });
-      const data = (await response.json()) as ConversationApiResponse;
+      const data = await parseJsonResponse<ConversationApiResponse>(
+        response,
+        "/api/conversation/delete",
+      );
       if (!response.ok) {
         throw new Error(data.error || "Unable to delete conversation.");
       }
