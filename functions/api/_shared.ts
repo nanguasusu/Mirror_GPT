@@ -71,6 +71,20 @@ export const json = (
     },
   });
 
+export const ensureChatKv = (env: Env) => {
+  if (env.CHAT_KV) {
+    return null;
+  }
+
+  return json(
+    {
+      error:
+        "Missing CHAT_KV binding. Add KV binding named CHAT_KV in Cloudflare Pages project settings.",
+    },
+    500,
+  );
+};
+
 export const getAllowedModels = (env: Env) =>
   (env.AI_MODELS || "")
     .split(",")

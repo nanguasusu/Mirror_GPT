@@ -1,5 +1,6 @@
 import {
   createConversation,
+  ensureChatKv,
   getAllowedModels,
   getAuthenticatedUser,
   getDefaultUsername,
@@ -26,6 +27,11 @@ export const onRequestGet = async ({
       },
       200,
     );
+  }
+
+  const kvError = ensureChatKv(env);
+  if (kvError) {
+    return kvError;
   }
 
   const index = await readConversationIndex(env, username);

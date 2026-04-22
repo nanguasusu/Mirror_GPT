@@ -1,6 +1,7 @@
 import {
   createSessionCookie,
   createConversation,
+  ensureChatKv,
   getDefaultPassword,
   getDefaultUsername,
   json,
@@ -35,6 +36,11 @@ export const onRequestPost = async ({
     password !== getDefaultPassword(env)
   ) {
     return json({ error: "Invalid username or password." }, 401);
+  }
+
+  const kvError = ensureChatKv(env);
+  if (kvError) {
+    return kvError;
   }
 
   const conversation = await readConversation(env, username);

@@ -2,6 +2,7 @@ import {
   defaultModel,
   defaultMode,
   defaultSystemPrompt,
+  ensureChatKv,
   getAllowedModels,
   getAuthenticatedUser,
   getModeInstruction,
@@ -204,6 +205,11 @@ export const onRequestPost = async ({
     return json({ error: "Unauthorized." }, 401);
   }
 
+  const kvError = ensureChatKv(env);
+  if (kvError) {
+    return kvError;
+  }
+
   if (!env.AI_API_KEY) {
     return json(
       { error: "Missing AI_API_KEY. Set it in Cloudflare Pages environment variables." },
@@ -251,6 +257,16 @@ export const onRequestPost = async ({
   ]
     .filter(Boolean)
     .join("\n\n");
+
+  await writeConversation(env, username, {
+    id: conversationId,
+    title: "",
+    messages: normalizedMessages,
+    model: selectedModel,
+    mode: selectedMode,
+    updatedAt: new Date().toISOString(),
+  });
+  await setActiveConversation(env, username, conversationId);
 
   let upstreamResponse: Response;
   try {

@@ -21,6 +21,8 @@ import {
   PencilLine,
 } from "lucide-react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
 import { useIsMobile } from "@/hooks/use-mobile";
 
@@ -952,10 +954,15 @@ const Index = () => {
                             className="mb-3 max-h-64 rounded-2xl border border-white/10 object-cover"
                           />
                         )}
-                        {message.content ||
-                          (message.role === "user" && message.imageDataUrl
-                            ? "Image attached"
-                            : "")}
+                        {message.content ? (
+                          <MessageMarkdown content={message.content} />
+                        ) : message.role === "assistant" && isLoading ? (
+                          <ThinkingIndicator />
+                        ) : message.role === "user" && message.imageDataUrl ? (
+                          "Image attached"
+                        ) : (
+                          ""
+                        )}
                       </div>
                     </div>
                   ))}
@@ -1140,6 +1147,28 @@ const ComposerIcon = ({
   >
     <Icon className="size-5" />
   </button>
+);
+
+const MessageMarkdown = ({ content }: { content: string }) => (
+  <ReactMarkdown
+    remarkPlugins={[remarkGfm]}
+    className="prose prose-sm max-w-none break-words prose-headings:text-inherit prose-p:text-inherit prose-a:text-inherit prose-strong:text-inherit prose-code:text-inherit prose-pre:text-inherit prose-pre:bg-black/20 prose-ul:text-inherit prose-ol:text-inherit prose-li:text-inherit prose-p:my-2 prose-ul:my-2 prose-ol:my-2 prose-pre:my-2 prose-code:before:content-none prose-code:after:content-none"
+  >
+    {content}
+  </ReactMarkdown>
+);
+
+const ThinkingIndicator = () => (
+  <div className="inline-flex items-center gap-2 text-muted-foreground">
+    <span className="text-xs font-medium tracking-[0.16em] uppercase bg-gradient-to-r from-sky-300 via-emerald-300 to-cyan-300 bg-clip-text text-transparent animate-pulse">
+      Thinking
+    </span>
+    <span className="inline-flex items-center gap-1">
+      <span className="size-1.5 rounded-full bg-current animate-bounce [animation-delay:-0.2s]" />
+      <span className="size-1.5 rounded-full bg-current animate-bounce [animation-delay:-0.1s]" />
+      <span className="size-1.5 rounded-full bg-current animate-bounce" />
+    </span>
+  </div>
 );
 
 export default Index;
