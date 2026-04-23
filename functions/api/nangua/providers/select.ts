@@ -45,11 +45,21 @@ export const onRequestPost = async ({
   }
 
   const selectedModel = body.model?.trim();
+  if (selectedModel && !provider.models.includes(selectedModel)) {
+    return json({ error: "Selected model is not available for this provider." }, 400);
+  }
+
+  const nextSelectedModel =
+    selectedModel ||
+    state.activeModelByProvider[provider.id] ||
+    provider.models[0] ||
+    "";
+
   const nextState = {
     activeProviderId: provider.id,
     activeModelByProvider: {
       ...state.activeModelByProvider,
-      ...(selectedModel ? { [provider.id]: selectedModel } : {}),
+      [provider.id]: nextSelectedModel,
     },
     providers: state.providers,
   };

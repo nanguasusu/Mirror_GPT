@@ -72,6 +72,14 @@ type ConversationApiResponse = {
   activeConversation?: ConversationPayload | null;
 };
 
+type ProviderSelectionPayload = {
+  ok?: boolean;
+  error?: string;
+  activeProviderId?: string | null;
+  activeModelByProvider?: Record<string, string>;
+  providers?: ProviderPayload[];
+};
+
 type ProviderPayload = {
   id: string;
   name: string;
@@ -117,6 +125,9 @@ const fileToDataUrl = (file: File) =>
     reader.onerror = () => reject(new Error("Unable to read image."));
     reader.readAsDataURL(file);
   });
+
+const REQUEST_TIMEOUT_MS = 120_000;
+const STREAM_IDLE_TIMEOUT_MS = 35_000;
 
 const buildConversationTitle = (messages: ChatMessage[]) => {
   const firstUserMessage = messages.find((message) => message.role === "user");
@@ -164,6 +175,7 @@ const Index = () => {
   const [username, setUsername] = useState("demo");
   const [availableModels, setAvailableModels] = useState<string[]>(["gpt-4o-mini"]);
   const [availableProviders, setAvailableProviders] = useState<ProviderPayload[]>([]);
+  const [activeModelByProvider, setActiveModelByProvider] = useState<Record<string, string>>({});
   const [selectedProviderId, setSelectedProviderId] = useState("");
   const [selectedModel, setSelectedModel] = useState("gpt-4o-mini");
   const [selectedMode, setSelectedMode] = useState<ChatMode>("chat");
@@ -189,6 +201,28 @@ const Index = () => {
   const scrollAreaRef = useRef<HTMLElement | null>(null);
   const endOfMessagesRef = useRef<HTMLDivElement | null>(null);
   const shouldAutoScrollRef = useRef(true);
+  const abortReasonRef = useRef<"manual" | "timeout" | "idle" | null>(null);
+
+  const pickProviderModel = (
+    provider: ProviderPayload | undefined,
+    preferredModel?: string,
+  ) => {
+    if (!provider) {
+      return preferredModel || "";
+    }
+
+    const providerModels = provider.models || [];
+    if (preferredModel && providerModels.includes(preferredModel)) {
+      return preferredModel;
+    }
+
+    const activeModel = activeModelByProvider[provider.id];
+    if (activeModel && providerModels.includes(activeModel)) {
+      return activeModel;
+    }
+
+    return providerModels[0] || "";
+  };
 
   useEffect(() => {
     if (isMobile) {
@@ -282,17 +316,24 @@ const Index = () => {
           providers.find((provider) => provider.enabled)?.id ||
           "";
         const selectedProvider = providers.find((provider) => provider.id === activeProviderId);
+        const activeByProvider = data.activeModelByProvider || {};
         const fallbackModel =
-          (activeProviderId &&
-            data.activeModelByProvider?.[activeProviderId]) ||
+          (activeProviderId && activeByProvider[activeProviderId]) ||
           selectedProvider?.models?.[0] ||
           data.models?.[0] ||
           "gpt-4o-mini";
 
         setAvailableProviders(providers);
+        setActiveModelByProvider(activeByProvider);
         setSelectedProviderId(activeProviderId);
         setAvailableModels(selectedProvider?.models || data.models || ["gpt-4o-mini"]);
-        setSelectedModel(data.conversation?.model || data.selectedModel || fallbackModel);
+        setSelectedModel(
+          selectedProvider?.models?.includes(data.conversation?.model || "")
+            ? (data.conversation?.model as string)
+            : data.selectedModel && selectedProvider?.models?.includes(data.selectedModel)
+              ? data.selectedModel
+              : fallbackModel,
+        );
         setSelectedMode(data.conversation?.mode || "chat");
         setUsername(data.username || "demo");
         setConversations(data.conversations || []);
@@ -328,6 +369,12 @@ const Index = () => {
 
   const selectedProvider = availableProviders.find((provider) => provider.id === selectedProviderId);
 
+  useEffect(() => {
+    if (!availableModels.includes(selectedModel)) {
+      setSelectedModel(availableModels[0] || "");
+    }
+  }, [availableModels, selectedModel]);
+
   const persistProviderSelection = async (providerId: string, model?: string) => {
     const response = await fetch("/api/nangua/providers/select", {
       method: "POST",
@@ -339,25 +386,34 @@ const Index = () => {
         ...(model ? { model } : {}),
       }),
     });
+    const data = await parseJsonResponse<ProviderSelectionPayload>(
+      response,
+      "/api/nangua/providers/select",
+    );
     if (!response.ok) {
-      const data = await parseJsonResponse<{ error?: string }>(
-        response,
-        "/api/nangua/providers/select",
-      );
       throw new Error(data.error || "Unable to switch provider.");
     }
+    return data;
   };
 
   const applyConversationPayload = (payload: ConversationApiResponse) => {
     if (payload.conversation) {
       setConversationId(payload.activeConversationId || payload.conversation.id);
       setMessages(payload.conversation.messages || []);
-      setSelectedModel(payload.conversation.model || selectedModel);
+      setSelectedModel((current) =>
+        availableModels.includes(payload.conversation?.model || "")
+          ? (payload.conversation?.model as string)
+          : current,
+      );
       setSelectedMode(payload.conversation.mode || "chat");
     } else if (payload.activeConversation) {
       setConversationId(payload.activeConversationId || payload.activeConversation.id);
       setMessages(payload.activeConversation.messages || []);
-      setSelectedModel(payload.activeConversation.model || selectedModel);
+      setSelectedModel((current) =>
+        availableModels.includes(payload.activeConversation?.model || "")
+          ? (payload.activeConversation?.model as string)
+          : current,
+      );
       setSelectedMode(payload.activeConversation.mode || "chat");
     }
 
@@ -404,13 +460,36 @@ const Index = () => {
   };
 
   const streamReply = async (nextMessages: ChatMessage[]) => {
+    if (!selectedModel) {
+      setError("No model available for the selected provider. Add or refresh models in /nangua.");
+      return;
+    }
+
     const controller = new AbortController();
     abortControllerRef.current = controller;
+    abortReasonRef.current = null;
     setIsLoading(true);
     setError("");
 
     const assistantId = crypto.randomUUID();
     setMessages([...nextMessages, { id: assistantId, role: "assistant", content: "" }]);
+    let requestTimeout: ReturnType<typeof setTimeout> | null = null;
+    let idleTimeout: ReturnType<typeof setTimeout> | null = null;
+
+    const resetIdleTimeout = () => {
+      if (idleTimeout) {
+        clearTimeout(idleTimeout);
+      }
+      idleTimeout = setTimeout(() => {
+        abortReasonRef.current = "idle";
+        controller.abort();
+      }, STREAM_IDLE_TIMEOUT_MS);
+    };
+
+    requestTimeout = setTimeout(() => {
+      abortReasonRef.current = "timeout";
+      controller.abort();
+    }, REQUEST_TIMEOUT_MS);
 
     try {
       const response = await fetch("/api/chat", {
@@ -428,6 +507,7 @@ const Index = () => {
         }),
         signal: controller.signal,
       });
+      resetIdleTimeout();
 
       if (!response.ok) {
         const data = await parseJsonResponse<{ error?: string }>(response, "/api/chat");
@@ -448,6 +528,7 @@ const Index = () => {
         if (done) {
           break;
         }
+        resetIdleTimeout();
 
         buffer += decoder.decode(value, { stream: true });
         const events = buffer.split("\n\n");
@@ -470,6 +551,7 @@ const Index = () => {
 
           if (payload.type === "token" && payload.content) {
             finalContent += payload.content;
+            resetIdleTimeout();
             setMessages((current) =>
               current.map((message) =>
                 message.id === assistantId
@@ -497,6 +579,11 @@ const Index = () => {
         requestError.name === "AbortError"
       ) {
         setMessages((current) => current.filter((message) => message.id !== assistantId || message.content));
+        if (abortReasonRef.current === "timeout") {
+          setError("Model response timeout. The request was canceled automatically.");
+        } else if (abortReasonRef.current === "idle") {
+          setError("Model stream stalled for too long and was canceled.");
+        }
       } else {
         setMessages(nextMessages);
         setError(
@@ -506,6 +593,13 @@ const Index = () => {
         );
       }
     } finally {
+      if (requestTimeout) {
+        clearTimeout(requestTimeout);
+      }
+      if (idleTimeout) {
+        clearTimeout(idleTimeout);
+      }
+      abortReasonRef.current = null;
       abortControllerRef.current = null;
       setIsLoading(false);
     }
@@ -553,12 +647,14 @@ const Index = () => {
   };
 
   const handleLogout = async () => {
+    abortReasonRef.current = "manual";
     abortControllerRef.current?.abort();
     await fetch("/api/logout", { method: "POST" });
     navigate("/login", { replace: true, state: { from: "/" } });
   };
 
   const handleResetConversation = async () => {
+    abortReasonRef.current = "manual";
     abortControllerRef.current?.abort();
     if (authenticated) {
       const response = await fetch("/api/conversation/reset", { method: "POST" });
@@ -585,6 +681,7 @@ const Index = () => {
   };
 
   const handleStopStreaming = () => {
+    abortReasonRef.current = "manual";
     abortControllerRef.current?.abort();
   };
 
@@ -625,7 +722,11 @@ const Index = () => {
 
     setConversationId(data.activeConversationId || data.conversation?.id || "");
     setMessages(data.conversation?.messages || []);
-    setSelectedModel(data.conversation?.model || selectedModel);
+    setSelectedModel((current) =>
+      availableModels.includes(data.conversation?.model || "")
+        ? (data.conversation?.model as string)
+        : current,
+    );
     setSelectedMode(data.conversation?.mode || "chat");
     setConversations(data.conversations || []);
     setError("");
@@ -663,7 +764,11 @@ const Index = () => {
 
     setConversationId(data.activeConversationId || targetConversationId);
     setMessages(data.conversation?.messages || []);
-    setSelectedModel(data.conversation?.model || selectedModel);
+    setSelectedModel((current) =>
+      availableModels.includes(data.conversation?.model || "")
+        ? (data.conversation?.model as string)
+        : current,
+    );
     setSelectedMode(data.conversation?.mode || "chat");
     setConversations(data.conversations || []);
     setError("");
@@ -974,21 +1079,26 @@ const Index = () => {
                   <button
                     key={provider.id}
                     onClick={() => {
-                      const nextModel = provider.models[0] || "";
+                      const nextModel = pickProviderModel(provider);
                       setSelectedProviderId(provider.id);
                       setAvailableModels(provider.models || []);
-                      if (nextModel) {
-                        setSelectedModel(nextModel);
-                      }
+                      setSelectedModel(nextModel);
                       setShowProviderMenu(false);
                       setShowModelMenu(false);
-                      void persistProviderSelection(provider.id, nextModel).catch((selectionError) =>
-                        setError(
-                          selectionError instanceof Error
-                            ? selectionError.message
-                            : "Unable to switch provider.",
-                        ),
-                      );
+                      void persistProviderSelection(provider.id, nextModel || undefined)
+                        .then((payload) => {
+                          setActiveModelByProvider(payload.activeModelByProvider || {});
+                          if (payload.providers) {
+                            setAvailableProviders(payload.providers);
+                          }
+                        })
+                        .catch((selectionError) =>
+                          setError(
+                            selectionError instanceof Error
+                              ? selectionError.message
+                              : "Unable to switch provider.",
+                          ),
+                        );
                     }}
                     className={`w-full text-left px-3 py-2 rounded-xl text-sm hover:bg-accent ${
                       selectedProviderId === provider.id ? "bg-accent" : ""
@@ -1011,7 +1121,7 @@ const Index = () => {
               }
               className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-sm font-semibold hover:bg-accent sm:px-3 sm:text-base"
             >
-              {selectedModel}
+              {selectedModel || "No model"}
               <ChevronDown className="size-4 text-muted-foreground" />
             </button>
             <div
@@ -1021,30 +1131,41 @@ const Index = () => {
                   : "opacity-0 scale-95 -translate-y-1 pointer-events-none"
               }`}
             >
-              {availableModels.map((model) => (
-                <button
-                  key={model}
-                  onClick={() => {
-                    setSelectedModel(model);
-                    setShowModelMenu(false);
-                    setShowProviderMenu(false);
-                    if (selectedProviderId) {
-                      void persistProviderSelection(selectedProviderId, model).catch((selectionError) =>
-                        setError(
-                          selectionError instanceof Error
-                            ? selectionError.message
-                            : "Unable to switch model.",
-                        ),
-                      );
-                    }
-                  }}
-                  className={`w-full text-left px-3 py-2 rounded-xl text-sm hover:bg-accent ${
-                    selectedModel === model ? "bg-accent" : ""
-                  }`}
-                >
-                  {model}
-                </button>
-              ))}
+              {availableModels.length === 0 ? (
+                <div className="px-3 py-2 text-xs text-muted-foreground">No models for this provider.</div>
+              ) : (
+                availableModels.map((model) => (
+                  <button
+                    key={model}
+                    onClick={() => {
+                      setSelectedModel(model);
+                      setShowModelMenu(false);
+                      setShowProviderMenu(false);
+                      if (selectedProviderId) {
+                        void persistProviderSelection(selectedProviderId, model)
+                          .then((payload) => {
+                            setActiveModelByProvider(payload.activeModelByProvider || {});
+                            if (payload.providers) {
+                              setAvailableProviders(payload.providers);
+                            }
+                          })
+                          .catch((selectionError) =>
+                            setError(
+                              selectionError instanceof Error
+                                ? selectionError.message
+                                : "Unable to switch model.",
+                            ),
+                          );
+                      }
+                    }}
+                    className={`w-full text-left px-3 py-2 rounded-xl text-sm hover:bg-accent ${
+                      selectedModel === model ? "bg-accent" : ""
+                    }`}
+                  >
+                    {model}
+                  </button>
+                ))
+              )}
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -1109,7 +1230,7 @@ const Index = () => {
                       className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
                     >
                       <div
-                        className={`max-w-[92%] rounded-3xl px-4 py-3 text-sm leading-7 shadow-sm sm:max-w-[85%] sm:px-5 sm:py-4 ${
+                        className={`max-w-[92%] overflow-hidden rounded-3xl px-4 py-3 text-sm leading-7 shadow-sm sm:max-w-[85%] sm:px-5 sm:py-4 ${
                           message.role === "user"
                             ? "bg-primary text-primary-foreground"
                             : "bg-secondary text-secondary-foreground"
@@ -1320,7 +1441,32 @@ const ComposerIcon = ({
 const MessageMarkdown = ({ content }: { content: string }) => (
   <ReactMarkdown
     remarkPlugins={[remarkGfm]}
-    className="prose prose-sm max-w-none break-words prose-headings:text-inherit prose-p:text-inherit prose-a:text-inherit prose-strong:text-inherit prose-code:text-inherit prose-pre:text-inherit prose-pre:bg-black/20 prose-ul:text-inherit prose-ol:text-inherit prose-li:text-inherit prose-p:my-2 prose-ul:my-2 prose-ol:my-2 prose-pre:my-2 prose-code:before:content-none prose-code:after:content-none"
+    components={{
+      pre: ({ children }) => (
+        <pre className="my-3 max-w-full overflow-x-auto rounded-xl bg-black/80 p-3 text-slate-100">
+          {children}
+        </pre>
+      ),
+      code: ({ className, children, ...props }) => {
+        const languageClass = className || "";
+        const raw = String(children);
+        const isBlock = languageClass.includes("language-") || raw.includes("\n");
+        if (!isBlock) {
+          return (
+            <code className="rounded bg-black/10 px-1 py-0.5 text-[0.9em]" {...props}>
+              {children}
+            </code>
+          );
+        }
+
+        return (
+          <code className={`${languageClass} whitespace-pre`} {...props}>
+            {children}
+          </code>
+        );
+      },
+    }}
+    className="prose prose-sm max-w-none break-words prose-headings:text-inherit prose-p:text-inherit prose-a:text-inherit prose-strong:text-inherit prose-code:text-inherit prose-pre:text-inherit prose-pre:bg-transparent prose-ul:text-inherit prose-ol:text-inherit prose-li:text-inherit prose-p:my-2 prose-ul:my-2 prose-ol:my-2 prose-pre:my-2 prose-code:before:content-none prose-code:after:content-none"
   >
     {content}
   </ReactMarkdown>

@@ -50,6 +50,7 @@ const Nangua = () => {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [modelDraftByProvider, setModelDraftByProvider] = useState<Record<string, string>>({});
   const [name, setName] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
@@ -100,6 +101,11 @@ const Nangua = () => {
     setEnabled(true);
   };
 
+  const applyAdminPayload = (data: AdminSessionPayload) => {
+    setProviders(data.providers || []);
+    setActiveProviderId(data.activeProviderId || "");
+  };
+
   const submitProvider = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setBusy(true);
@@ -129,8 +135,7 @@ const Nangua = () => {
         throw new Error(data.error || "Unable to save provider.");
       }
 
-      setProviders(data.providers || []);
-      setActiveProviderId(data.activeProviderId || "");
+      applyAdminPayload(data);
       resetForm();
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Unable to save provider.");
@@ -158,8 +163,7 @@ const Nangua = () => {
         throw new Error(data.error || "Unable to refresh models.");
       }
 
-      setProviders(data.providers || []);
-      setActiveProviderId(data.activeProviderId || "");
+      applyAdminPayload(data);
     } catch (refreshError) {
       setError(refreshError instanceof Error ? refreshError.message : "Unable to refresh models.");
     } finally {
@@ -186,8 +190,7 @@ const Nangua = () => {
         throw new Error(data.error || "Unable to select provider.");
       }
 
-      setProviders(data.providers || []);
-      setActiveProviderId(data.activeProviderId || "");
+      applyAdminPayload(data);
     } catch (selectError) {
       setError(selectError instanceof Error ? selectError.message : "Unable to select provider.");
     } finally {
@@ -214,13 +217,72 @@ const Nangua = () => {
         throw new Error(data.error || "Unable to delete provider.");
       }
 
-      setProviders(data.providers || []);
-      setActiveProviderId(data.activeProviderId || "");
+      applyAdminPayload(data);
       if (editingId === providerId) {
         resetForm();
       }
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : "Unable to delete provider.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const upsertModel = async (providerId: string) => {
+    const model = modelDraftByProvider[providerId]?.trim();
+    if (!model) {
+      return;
+    }
+
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch("/api/nangua/providers/models/upsert", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ providerId, model }),
+      });
+      const data = await parseJsonResponse<AdminSessionPayload>(
+        response,
+        "/api/nangua/providers/models/upsert",
+      );
+      if (!response.ok || !data.ok) {
+        throw new Error(data.error || "Unable to add model.");
+      }
+
+      applyAdminPayload(data);
+      setModelDraftByProvider((current) => ({ ...current, [providerId]: "" }));
+    } catch (upsertError) {
+      setError(upsertError instanceof Error ? upsertError.message : "Unable to add model.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deleteModel = async (providerId: string, model: string) => {
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch("/api/nangua/providers/models/delete", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ providerId, model }),
+      });
+      const data = await parseJsonResponse<AdminSessionPayload>(
+        response,
+        "/api/nangua/providers/models/delete",
+      );
+      if (!response.ok || !data.ok) {
+        throw new Error(data.error || "Unable to delete model.");
+      }
+
+      applyAdminPayload(data);
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "Unable to delete model.");
     } finally {
       setBusy(false);
     }
@@ -376,8 +438,51 @@ const Nangua = () => {
                       {activeProviderId === provider.id ? "Active" : "Set Active"}
                     </Button>
                   </div>
-                  <div className="mt-3 text-xs text-muted-foreground">
-                    Models: {provider.models.length > 0 ? provider.models.join(", ") : "None"}
+                  <div className="mt-3 space-y-2">
+                    <p className="text-xs text-muted-foreground">Models</p>
+                    <div className="flex flex-wrap gap-2">
+                      {provider.models.length === 0 && (
+                        <span className="text-xs text-muted-foreground">No models</span>
+                      )}
+                      {provider.models.map((model) => (
+                        <span
+                          key={`${provider.id}:${model}`}
+                          className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-1 text-xs"
+                        >
+                          {model}
+                          <button
+                            type="button"
+                            className="text-muted-foreground hover:text-foreground"
+                            onClick={() => void deleteModel(provider.id, model)}
+                            disabled={busy}
+                            aria-label={`Delete model ${model}`}
+                          >
+                            x
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                    <div className="flex gap-2">
+                      <input
+                        value={modelDraftByProvider[provider.id] || ""}
+                        onChange={(event) =>
+                          setModelDraftByProvider((current) => ({
+                            ...current,
+                            [provider.id]: event.target.value,
+                          }))
+                        }
+                        placeholder="Add model id"
+                        className="w-full rounded-xl border border-border bg-background px-3 py-2 text-xs outline-none"
+                      />
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => void upsertModel(provider.id)}
+                        disabled={busy}
+                      >
+                        Add
+                      </Button>
+                    </div>
                   </div>
                 </div>
               ))}

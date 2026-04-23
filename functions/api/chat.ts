@@ -247,7 +247,10 @@ export const onRequestPost = async ({
     ? (body.model as string)
     : providerState.activeModelByProvider[activeProvider.id] ||
       activeProvider.models[0] ||
-      defaultModel;
+      "";
+  if (!selectedModel) {
+    return json({ error: "No model configured for selected provider. Add or refresh models in /nangua." }, 400);
+  }
   const selectedMode = body.mode || defaultMode;
 
   const systemPrompt = [
